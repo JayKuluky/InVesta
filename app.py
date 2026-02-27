@@ -3,7 +3,7 @@ Main Streamlit application for InVesta.
 Investment Portfolio Management Dashboard.
 """
 
-from datetime import date
+from datetime import date, datetime
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
@@ -125,9 +125,14 @@ def display_live_prices(portfolio_df: object) -> None:
             symbol = "📈" if change >= 0 else "📉"
             yahoo_link = f"https://finance.yahoo.com/quote/{ticker}"
             
+            # Add warning if price equals avg_cost (likely API failure fallback)
+            price_warning = ""
+            if current_price == avg_cost:
+                price_warning = " ⚠️"
+            
             # Always visible: Core metrics (ticker as clickable link, price, P&L)
             st.markdown(
-                f"[{symbol} **{ticker}**]({yahoo_link}) | Current: ${current_price:.2f} | "
+                f"[{symbol} **{ticker}**{price_warning}]({yahoo_link}) | Current: ${current_price:.2f} | "
                 f"Avg Cost: ${avg_cost:.2f} | "
                 f"<span style='color:{color}'>Change: {change:+.2f} ({change_pct:+.2f}%)</span>",
                 unsafe_allow_html=True
@@ -186,6 +191,44 @@ def display_live_prices(portfolio_df: object) -> None:
                         st.warning(f"Could not retrieve chart data for {ticker}")
                 
                 st.divider()
+
+
+@st.fragment(run_every=60)
+def display_portfolio_dashboard(metrics: dict, allocation_df: pd.DataFrame, portfolio_df: pd.DataFrame) -> None:
+    """
+    High-frequency refresh fragment for metrics and portfolio display.
+    Updates every 60 seconds without re-running the entire page.
+    
+    Args:
+        metrics: Portfolio metrics dictionary
+        allocation_df: Portfolio allocation dataframe
+        portfolio_df: Portfolio dataframe with current prices
+    """
+    # Display last updated timestamp
+    col_left, col_right = st.columns([3, 1])
+    with col_right:
+        st.caption(f"🕐 {datetime.now().strftime('%H:%M:%S')}")
+    
+    # Display Metrics Cards
+    display_metric_cards(metrics)
+
+    # Portfolio Allocation & Live Prices Section
+    if not allocation_df.empty and allocation_df["Value"].sum() > 0:
+        col_chart, col_prices = st.columns(2)
+        
+        with col_chart:
+            fig = px.pie(
+                allocation_df,
+                names="Ticker",
+                values="Value",
+                title="Portfolio Allocation",
+            )
+            st.plotly_chart(fig, width='stretch')
+        
+        with col_prices:
+            display_live_prices(portfolio_df)
+    else:
+        display_empty_state("No active investments to display.")
 
 
 @st.dialog("📋 Confirm Trade")
@@ -305,26 +348,8 @@ def main() -> None:
     )
     allocation_df = PortfolioCalculator.get_portfolio_allocation(portfolio_df)
 
-    # Display Metrics Cards
-    display_metric_cards(metrics)
-
-    # Portfolio Allocation & Live Prices Section
-    if not allocation_df.empty and allocation_df["Value"].sum() > 0:
-        col_chart, col_prices = st.columns(2)
-        
-        with col_chart:
-            fig = px.pie(
-                allocation_df,
-                names="Ticker",
-                values="Value",
-                title="Portfolio Allocation",
-            )
-            st.plotly_chart(fig, width='stretch')
-        
-        with col_prices:
-            display_live_prices(portfolio_df)
-    else:
-        display_empty_state("No active investments to display.")
+    # Display Portfolio Dashboard with High-Frequency Refresh (every 60 seconds)
+    display_portfolio_dashboard(metrics, allocation_df, portfolio_df)
 
     # Main Tabs
     tabs = st.tabs(
@@ -529,6 +554,33 @@ def main() -> None:
                 st.metric("Buy Orders", buy_trades)
             with col_stats3:
                 st.metric("Sell Orders", sell_trades)
+            
+            # CSV Export Section
+            st.divider()
+            st.subheader("📥 Download Data")
+            col_export1, col_export2 = st.columns(2)
+            
+            with col_export1:
+                # Export all transactions
+                csv_data = db.export_table_to_csv(TABLE_INVESTMENTS)
+                st.download_button(
+                    label="📥 Export All Transactions",
+                    data=csv_data,
+                    file_name=f"investa_transactions_{date.today()}.csv",
+                    mime="text/csv",
+                    width='stretch'
+                )
+            
+            with col_export2:
+                # Export trade history summary
+                csv_data = db.export_table_to_csv(TABLE_INVESTMENTS)
+                st.download_button(
+                    label="📥 Export Trade History",
+                    data=csv_data,
+                    file_name=f"investa_trades_{date.today()}.csv",
+                    mime="text/csv",
+                    width='stretch'
+                )
         else:
             display_empty_state("No investment history yet.")
 

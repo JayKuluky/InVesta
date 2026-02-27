@@ -205,3 +205,21 @@ class DatabaseManager:
                 f"SELECT * FROM {TABLE_INVESTMENTS} ORDER BY date DESC, id DESC",
                 conn,
             )
+
+    def export_table_to_csv(self, table_name: str) -> bytes:
+        """
+        Export a database table to CSV format as bytes.
+        
+        Args:
+            table_name: Name of the table to export
+        
+        Returns:
+            CSV data as UTF-8 encoded bytes
+        """
+        try:
+            with closing(self.get_conn()) as conn:
+                df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
+                return df.to_csv(index=False).encode('utf-8')
+        except Exception as e:
+            print(f"Error exporting table {table_name}: {e}")
+            return b""

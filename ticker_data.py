@@ -245,16 +245,19 @@ def get_stock_stats_summary(ticker: str) -> Optional[Dict]:
 @st.cache_data(ttl=1800)
 def batch_fetch_prices(tickers: List[str]) -> Dict[str, float]:
     """
-    Fetch current prices for multiple tickers in batch.
+    Fetch current prices for multiple tickers in batch with fallback support.
     
     Args:
         tickers: List of ticker symbols
     
     Returns:
-        Dictionary of {ticker: price}
+        Dictionary of {ticker: price} with valid prices only. Skips tickers with NaN values.
     """
     if not tickers:
         return {}
+    
+    prices = {}
+    failed_tickers = []
     
     try:
         data = yf.download(
@@ -263,22 +266,43 @@ def batch_fetch_prices(tickers: List[str]) -> Dict[str, float]:
             progress=False,
         )
         
-        prices = {}
         if len(tickers) == 1:
             # Single ticker returns Series
-            prices[tickers[0]] = float(data["Close"].iloc[-1].item())
+            try:
+                price = float(data["Close"].iloc[-1].item())
+                if not pd.isna(price):  # Only add if not NaN
+                    prices[tickers[0]] = price
+                else:
+                    failed_tickers.append(tickers[0])
+            except (ValueError, TypeError, IndexError):
+                failed_tickers.append(tickers[0])
         else:
             # Multiple tickers return DataFrame with MultiIndex columns
             if isinstance(data, pd.DataFrame):
                 for ticker in tickers:
                     try:
-                        # For MultiIndex columns: ('Close', 'AAPL')
+                        # Try MultiIndex column: ('Close', 'AAPL')
                         if ("Close", ticker) in data.columns:
-                            prices[ticker] = float(data[("Close", ticker)].iloc[-1].item())
-                    except (KeyError, TypeError):
+                            price = float(data[("Close", ticker)].iloc[-1].item())
+                            if not pd.isna(price):
+                                prices[ticker] = price
+                            else:
+                                failed_tickers.append(ticker)
                         # Fallback: try simple column access
-                        if ticker in data.columns:
-                            prices[ticker] = float(data[ticker]["Close"].iloc[-1].item())
+                        elif ticker in data.columns:
+                            price = float(data[ticker]["Close"].iloc[-1].item())
+                            if not pd.isna(price):
+                                prices[ticker] = price
+                            else:
+                                failed_tickers.append(ticker)
+                        else:
+                            failed_tickers.append(ticker)
+                    except (KeyError, ValueError, TypeError, IndexError) as e:
+                        failed_tickers.append(ticker)
+        
+        # Log failures for debugging but don't fail silently
+        if failed_tickers:
+            logging.warning(f"Could not fetch prices for: {', '.join(failed_tickers)}")
         
         return prices
     except Exception as e:

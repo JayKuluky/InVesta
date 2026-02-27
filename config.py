@@ -28,7 +28,7 @@ INCOME_CATEGORIES = [
 ]
 
 # Cache Settings
-YFINANCE_CACHE_TTL = 300  # 5 minutes
+YFINANCE_CACHE_TTL = 60  # 1 minute for high-frequency updates
 
 # UI Settings
 PAGE_TITLE = "Personal Finance & Portfolio Dashboard"
