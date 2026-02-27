@@ -8,6 +8,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import yfinance as yf
+import pandas as pd
 
 from config import (
     PAGE_TITLE,
@@ -19,7 +20,17 @@ from config import (
 )
 from database import DatabaseManager
 from portfolio import PortfolioAnalyzer
-from ticker_data import search_tickers, get_stock_stats_summary, get_historical_data, DEFAULT_TICKER
+from finance_logic import PortfolioCalculator, BatchPriceFetcher
+from ticker_data import (
+    search_tickers,
+    get_stock_stats_summary,
+    get_historical_data,
+    initialize_ticker_sync,
+    get_formatted_ticker_options,
+    get_ticker_from_option,
+    batch_fetch_prices,
+    DEFAULT_TICKER
+)
 from ui import display_metric_cards, display_empty_state, display_confirmation_message
 
 
@@ -29,11 +40,69 @@ def get_db_manager() -> DatabaseManager:
     return DatabaseManager()
 
 
+@st.cache_resource
+def init_ticker_sync():
+    """Initialize ticker synchronization with Nasdaq FTP."""
+    with st.spinner("🔄 Synchronizing ticker database..."):
+        return initialize_ticker_sync()
+    return None
+
+
 def get_available_tickers(investments_df) -> list:
     """Get list of unique tickers from database."""
     if investments_df.empty:
         return []
     return sorted(investments_df['ticker'].unique().tolist())
+
+
+def format_portfolio_with_links(portfolio_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Format portfolio dataframe with Yahoo Finance links for tickers.
+    
+    Args:
+        portfolio_df: Portfolio dataframe
+    
+    Returns:
+        Formatted dataframe with clickable ticker links
+    """
+    if portfolio_df.empty:
+        return portfolio_df
+    
+    # Create a copy to avoid modifying original
+    df = portfolio_df.copy()
+    
+    # Add Yahoo Finance links for ticker column
+    if 'Ticker' in df.columns:
+        df['Ticker'] = df['Ticker'].apply(
+            lambda ticker: f"https://finance.yahoo.com/quote/{ticker}"
+        )
+    
+    return df
+
+
+def format_investments_with_links(investments_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Format investments dataframe with Yahoo Finance links for tickers.
+    
+    Args:
+        investments_df: Investments dataframe
+    
+    Returns:
+        Formatted dataframe with clickable ticker links
+    """
+    if investments_df.empty:
+        return investments_df
+    
+    # Create a copy to avoid modifying original
+    df = investments_df.copy()
+    
+    # Add Yahoo Finance links for ticker column
+    if 'ticker' in df.columns:
+        df['ticker'] = df['ticker'].apply(
+            lambda ticker: f"https://finance.yahoo.com/quote/{ticker}"
+        )
+    
+    return df
 
 
 def display_live_prices(portfolio_df: object) -> None:
@@ -105,7 +174,7 @@ def display_live_prices(portfolio_df: object) -> None:
                     hovermode='x unified',
                     height=400
                 )
-                st.plotly_chart(fig, width='stretch')
+                st.plotly_chart(fig, use_container_width=True)
             else:
                 st.warning(f"Could not retrieve chart data for {ticker}")
         
@@ -173,17 +242,28 @@ def main() -> None:
     st.set_page_config(page_title=PAGE_TITLE, layout=PAGE_LAYOUT, page_icon=PAGE_ICON)
     st.title(f"{PAGE_ICON} {PAGE_TITLE}")
 
+    # Initialize ticker synchronization (Nasdaq FTP sync)
+    init_ticker_sync()
+
     # Initialize database manager
     db = get_db_manager()
 
     # Load Data
     transactions_df = db.fetch_transactions()
     investments_df = db.fetch_investments()
-    portfolio_df = PortfolioAnalyzer.aggregate_portfolio(investments_df)
-    metrics = PortfolioAnalyzer.compute_metrics(
-        transactions_df, investments_df, portfolio_df
+    
+    # Fetch current prices using batch fetcher for performance
+    ticker_prices = {}
+    if not investments_df.empty:
+        tickers = investments_df['ticker'].unique().tolist()
+        ticker_prices = batch_fetch_prices(tickers)
+    
+    # Use PortfolioCalculator for portfolio aggregation with realized P&L
+    portfolio_df = PortfolioCalculator.aggregate_portfolio(investments_df, ticker_prices)
+    metrics = PortfolioCalculator.compute_metrics(
+        transactions_df, investments_df, portfolio_df, ticker_prices
     )
-    allocation_df = PortfolioAnalyzer.get_portfolio_allocation(portfolio_df)
+    allocation_df = PortfolioCalculator.get_portfolio_allocation(portfolio_df)
 
     # Display Metrics Cards
     display_metric_cards(metrics)
@@ -232,28 +312,23 @@ def main() -> None:
                 key="trade_type_select"
             )
         
-        # Step 2: Ticker Search
+        # Step 2: Ticker Selection from Nasdaq Database
         with col2:
-            ticker_search = st.text_input(
-                "Search Ticker (e.g., NVDA, AAPL)",
-                placeholder="Leave empty for AAPL...",
-                key="ticker_search"
+            # Get formatted ticker options from Nasdaq database
+            ticker_options = get_formatted_ticker_options()
+            # Add empty placeholder as first option (no prefill)
+            ticker_options_with_placeholder = [""] + ticker_options
+            
+            ticker_display = st.selectbox(
+                "Select Ticker (Nasdaq Database)",
+                ticker_options_with_placeholder,
+                index=0,
+                key="ticker_select",
+                help="Select from 100,000+ tickers in Nasdaq database"
             )
             
-            # Get ticker suggestions
-            if ticker_search:
-                matching_tickers = search_tickers(ticker_search, limit=10)
-                ticker_input = st.selectbox(
-                    "Select ticker",
-                    matching_tickers,
-                    key="ticker_select",
-                    label_visibility="collapsed"
-                )
-            else:
-                # Auto-select AAPL if no input
-                matching_tickers = search_tickers("AAPL", limit=1)
-                ticker_input = matching_tickers[0] if matching_tickers else DEFAULT_TICKER
-                st.caption(f"Default ticker: **{ticker_input}**")
+            # Extract ticker symbol from display format (only if something is selected)
+            ticker_input = get_ticker_from_option(ticker_display) if ticker_display else None
         
         st.divider()
         
@@ -298,8 +373,8 @@ def main() -> None:
         
         st.divider()
         
-        # Confirm button (always enabled now, ticker has auto-default)
-        if shares > 0 and price > 0:
+        # Confirm button (requires ticker selection)
+        if ticker_input and shares > 0 and price > 0:
             if st.button("✅ Confirm Trade", use_container_width=True):
                 # Prepare trade data for confirmation dialog
                 trade_data = {
@@ -312,6 +387,10 @@ def main() -> None:
                 }
                 st.session_state.pending_trade = trade_data
                 show_trade_confirmation(trade_data)
+        elif not ticker_input:
+            st.warning("⚠️ Please select a ticker to proceed")
+        elif shares <= 0 or price <= 0:
+            st.warning("⚠️ Shares and price must be greater than 0")
             
             # Check if trade was confirmed
             if st.session_state.get('trade_confirmed', False):
@@ -337,7 +416,25 @@ def main() -> None:
         st.divider()
         st.subheader("📊 Current Portfolio")
         if not portfolio_df.empty:
-            st.dataframe(portfolio_df, width='stretch')
+            # Create column configuration with Yahoo Finance links
+            column_config = {
+                "Ticker": st.column_config.LinkColumn(
+                    label="🔗 Ticker",
+                    help="Click to open on Yahoo Finance"
+                )
+            }
+            
+            # Format tickers as URLs for display
+            portfolio_display = portfolio_df.copy()
+            portfolio_display['Ticker'] = portfolio_display['Ticker'].apply(
+                lambda t: f"https://finance.yahoo.com/quote/{t}"
+            )
+            
+            st.dataframe(
+                portfolio_display,
+                column_config=column_config,
+                width='stretch'
+            )
         else:
             display_empty_state("No active holdings yet.")
 
@@ -347,7 +444,26 @@ def main() -> None:
         
         if not investments_df.empty:
             st.subheader("All Transactions")
-            st.dataframe(investments_df, width='stretch')
+            
+            # Create column configuration with Yahoo Finance links for ticker
+            column_config = {
+                "ticker": st.column_config.LinkColumn(
+                    label="🔗 Ticker",
+                    help="Click to open on Yahoo Finance"
+                )
+            }
+            
+            # Format tickers as URLs for display
+            investments_display = investments_df.copy()
+            investments_display['ticker'] = investments_display['ticker'].apply(
+                lambda t: f"https://finance.yahoo.com/quote/{t}"
+            )
+            
+            st.dataframe(
+                investments_display,
+                column_config=column_config,
+                width='stretch'
+            )
             
             # Statistics
             st.divider()

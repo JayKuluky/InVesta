@@ -1,123 +1,160 @@
 """
 Ticker search and stock data module for InVesta.
-Provides real-time ticker search and chart data.
+Provides real-time ticker search and chart data with Nasdaq sync fallback.
 """
 
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Optional
 import logging
 import yfinance as yf
 import pandas as pd
 import streamlit as st
 
-# Suppress yfinance and urllib3 warnings
+from ticker_sync import get_sync_manager
+
+# Suppress warnings
 logging.getLogger('yfinance').setLevel(logging.ERROR)
 logging.getLogger('urllib3').setLevel(logging.ERROR)
 logging.getLogger('requests').setLevel(logging.ERROR)
 
-
-# S&P 500 和其他主要美股列表（无重复）
+# Fallback: Local 218-ticker list (used if Nasdaq sync fails)
 US_STOCK_TICKERS = [
-    # Big Tech
-    "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "META", "TSLA",
-    # Finance
-    "JPM", "BAC", "WFC", "GS", "C", "BLK", "SCHW", "CBOE",
-    # Healthcare
-    "JNJ", "UNH", "PFE", "MRK", "ABBV", "TMO", "GILD", "BIIB",
-    # Energy
-    "XOM", "CVX", "COP", "MPC", "PSX", "VLO", "EOG", "SLB",
-    # Materials
-    "LIN", "APD", "DOW", "DD", "NEM", "FCX", "STLD", "MTH",
-    # Industrials
-    "BA", "CAT", "GE", "RTX", "LMT", "HON", "ITW", "CARR",
-    # Consumer
-    "WMT", "KO", "PEP", "MCD", "NKE", "HD", "LOW", "COST",
-    # Communication
-    "VZ", "T", "CMCSA", "CHTR", "DIS", "NFLX", "CHARS",
-    # Real Estate
-    "PLD", "EQIX", "EQR", "ARE", "SHO", "PSA", "WELL",
-    # Utilities
-    "NEE", "DUK", "SO", "EXC", "AEP", "PPL", "PNW",
-    # Insurance
-    "BRK.B", "BRK.A", "ALL", "AIG", "PRU", "LPL", "FRC",
-    # Pharmaceuticals & Biotech
-    "LLY", "AMGN", "REGN", "VRTX", "CRSP", "EDIT", "EXAS", "ILMN",
-    # Semiconductors
-    "AMD", "QCOM", "INTC", "MRVL", "AVGO", "TXN", "INTU", "SNPS",
-    # Software & IT Services
-    "ORCL", "IBM", "SAP", "CRM", "SNOW", "ADBE", "ASML", "WDAY",
-    # E-commerce & Internet
-    "EBAY", "PINS", "UBER", "LYFT", "DASH", "SE", "SPOT", "RBLX",
-    # Airlines & Transportation
-    "DAL", "UAL", "AAL", "SW", "EXPD", "FDX", "UPS", "LUV",
-    # Retail & Discretionary
-    "F", "GM", "TM", "HMC", "BWA", "MAC", "CPRI", "RL",
-    # Media & Entertainment
-    "PARA", "FOXA", "FOX", "LIONSB", "IMAX", "MSON",
-    # Banking & Financial
-    "MS", "PYPL", "SQ", "SIVB",
-    # Automotive
-    "VWAGY", "NSANY", "GELYY", "HYMTF",
-    # Apparel & Footwear
-    "ADDYY", "VFC", "PVH", "ON", "SKX",
-    # Household Products
-    "PG", "CL", "CLX", "KMB", "HRL", "NUVA", "UL", "DRUKF",
-    # Food & Beverage
-    "SBUX", "QSR", "KKR", "MONDELEZ", "MDLZ", "CALX",
-    # Chemicals
-    "LYB", "IONM", "CE", "EMN", "WLK",
-    # Paper & Packaging
-    "IP", "WRK", "PKG", "MLL", "BOX", "GMS", "PGH", "UGI",
-    # Machinery
-    "XYLEM", "INSW", "GHC", "WIRE", "HI", "RLOG", "SHCO",
-    # Electronics & Components
-    "CCI", "TMUS", "VOD", "O", "STAG", "MINT",
-    # Miscellaneous
-    "ETN", "TT", "HRSTY", "PWR", "MOS", "CEL",
-    # Additional Major Companies
-    "AXP", "CAL", "CHD", "CSCO", "ACN", "CTSH", "V", "MA",
-    "PYPL", "YUM", "MU", "LRCX", "ROP", "ROP", "GTLB", "GTLS",
-    "EWBC", "FITB", "CMG", "EBAY", "PING", "POWI", "PSTG", "PGTI",
+    "AAL", "AAPL", "ABBV", "ACN", "ADBE", "ADDYY", "AEP", "AIG", "ALL", "AMD",
+    "AMGN", "AMZN", "APD", "AXP", "BAC", "BA", "BLK", "BRK.A", "BRK.B", "BWA",
+    "C", "CAL", "CAT", "CBOE", "CARR", "CHD", "CHTR", "CMCSA", "COP", "COST",
+    "CPRI", "CRM", "CRSP", "CSCO", "CTSH", "CVX", "DAL", "DASH", "DD", "DIS",
+    "DOW", "DRUKF", "DUK", "EDIT", "EBAY", "EQIX", "EQR", "ETN", "EXAS", "EXC",
+    "EXPD", "F", "FCX", "FDX", "FITB", "FOXA", "FOX", "FRC", "GE", "GELYY",
+    "GHC", "GILD", "GM", "GS", "GTLB", "GTLS", "GOOG", "GOOGL", "HD", "HI",
+    "HMC", "HON", "HRSTY", "HYMTF", "IBM", "ILMN", "IMAX", "INSW", "INTC",
+    "INTU", "IONM", "IP", "ITW", "JNJ", "JPM", "KKR", "KMB", "KO", "LIN",
+    "LIONSB", "LLY", "LMT", "LPL", "LOW", "LRCX", "LUV", "LYB", "LYFT", "MA",
+    "MAC", "MCD", "MDLZ", "META", "MLL", "MONDELEZ", "MOS", "MRVL", "MU", "MS",
+    "NEE", "NEM", "NFLX", "NKE", "NSANY", "NUVA", "ORCL", "O", "PEP", "PFE",
+    "PG", "PINS", "PKG", "PLD", "PNW", "PPL", "PRU", "PSA", "PSX", "PYPL",
+    "QCOM", "QSR", "RBLX", "REGN", "RL", "RLOG", "ROP", "RTX", "SAP", "SBUX",
+    "SCHW", "SE", "SHCO", "SHO", "SIVB", "SKX", "SLB", "SNPS", "SO", "SPOT",
+    "SQ", "STAG", "STLD", "SW", "T", "TMUS", "TMO", "TT", "UGI", "UL", "UNH",
+    "UPS", "UAL", "VLC", "VLO", "VOD", "VRTX", "VZ", "WDAY", "WELL", "WFC",
+    "WLK", "WMT", "WIRE", "WRK", "XYLEM", "XOM", "YUM", "VWAGY",
 ]
 
-# Remove any duplicates by converting to set and back to list
-US_STOCK_TICKERS = sorted(list(set(US_STOCK_TICKERS)))
-
-# Default ticker if nothing selected
 DEFAULT_TICKER = "AAPL"
+
+
+@st.cache_resource
+def initialize_ticker_sync():
+    """Initialize and sync Nasdaq ticker database if needed."""
+    manager = get_sync_manager()
+    try:
+        manager.sync_if_needed()
+        ticker_count = manager.get_ticker_count()
+        if ticker_count > 0:
+            logging.info(f"Ticker database ready: {ticker_count} tickers")
+            return True
+    except Exception as e:
+        logging.warning(f"Nasdaq sync failed, using local ticker list: {e}")
+    return False
 
 
 @st.cache_data(ttl=3600)
 def search_tickers(query: str, limit: int = 10) -> List[str]:
     """
-    Search for tickers matching the query from US stock list.
+    Search for tickers from Nasdaq database or local list.
     
     Args:
-        query: Search query (e.g., "NVDA" or "NV")
-        limit: Max number of results to return
+        query: Search query (e.g., "NVDA" or "apple")
+        limit: Max number of results
     
     Returns:
         List of matching ticker symbols
     """
     if not query or len(query) < 1:
-        # Return top tickers when no query
         return [DEFAULT_TICKER]
     
-    query_upper = query.upper().strip()
+    manager = get_sync_manager()
+    ticker_count = manager.get_ticker_count()
     
-    # Search for tickers starting with query
+    # Use Nasdaq database if available
+    if ticker_count > 0:
+        try:
+            options = manager.get_ticker_options(query)
+            tickers = [manager.get_ticker_from_option(opt) for opt in options]
+            tickers = [t for t in tickers if t]  # Filter out None values
+            if tickers:
+                return tickers[:limit]
+        except Exception as e:
+            logging.warning(f"Error searching Nasdaq database: {e}")
+    
+    # Fallback to local list
+    query_upper = query.upper().strip()
     matches = sorted([t for t in US_STOCK_TICKERS if t.startswith(query_upper)])
     
-    # If no prefix matches, try substring matches
     if not matches:
         matches = sorted([t for t in US_STOCK_TICKERS if query_upper in t])
     
     return matches[:limit] if matches else [DEFAULT_TICKER]
 
 
+def get_formatted_ticker_options(search_query: str = "") -> List[str]:
+    """
+    Get formatted ticker options for UI selectbox.
+    
+    Args:
+        search_query: Optional search filter
+    
+    Returns:
+        List of formatted strings: "SYMBOL | Name (Type)"
+    """
+    manager = get_sync_manager()
+    ticker_count = manager.get_ticker_count()
+    
+    if ticker_count > 0:
+        try:
+            return manager.get_ticker_options(search_query)
+        except Exception as e:
+            logging.warning(f"Error getting formatted options: {e}")
+    
+    # Fallback: format local list (return all 218 tickers or filtered results)
+    options = []
+    search_upper = search_query.strip().upper() if search_query else ""
+    
+    for ticker in US_STOCK_TICKERS:
+        # Filter by search query if provided
+        if search_upper:
+            if not (ticker.upper().startswith(search_upper) or search_upper in ticker.upper()):
+                continue
+        
+        display = f"{ticker} | {ticker}"
+        options.append(display)
+    
+    return options
+
+
+def get_ticker_from_option(option: str) -> str:
+    """
+    Extract ticker symbol from formatted option string.
+    
+    Args:
+        option: Formatted string like "AAPL | Apple Inc. (Stock)"
+    
+    Returns:
+        Ticker symbol extracted from option
+    """
+    manager = get_sync_manager()
+    ticker = manager.get_ticker_from_option(option)
+    if ticker:
+        return ticker
+    
+    # Fallback: extract from local format
+    if " | " in option:
+        return option.split(" | ")[0].strip()
+    return option
+
+
 @st.cache_data(ttl=600)
 def get_stock_info(ticker: str) -> Optional[Dict]:
     """
-    Get detailed stock information.
+    Get detailed stock information from yfinance.
     
     Args:
         ticker: Stock ticker symbol
@@ -129,7 +166,6 @@ def get_stock_info(ticker: str) -> Optional[Dict]:
         data = yf.Ticker(ticker)
         info = data.info
         
-        # Extract key fields
         return {
             "symbol": ticker,
             "name": info.get("longName", ""),
@@ -204,3 +240,47 @@ def get_stock_stats_summary(ticker: str) -> Optional[Dict]:
         }
     except Exception:
         return None
+
+
+@st.cache_data(ttl=1800)
+def batch_fetch_prices(tickers: List[str]) -> Dict[str, float]:
+    """
+    Fetch current prices for multiple tickers in batch.
+    
+    Args:
+        tickers: List of ticker symbols
+    
+    Returns:
+        Dictionary of {ticker: price}
+    """
+    if not tickers:
+        return {}
+    
+    try:
+        data = yf.download(
+            " ".join(tickers),
+            period="1d",
+            progress=False,
+        )
+        
+        prices = {}
+        if len(tickers) == 1:
+            # Single ticker returns Series
+            prices[tickers[0]] = float(data["Close"].iloc[-1].item())
+        else:
+            # Multiple tickers return DataFrame with MultiIndex columns
+            if isinstance(data, pd.DataFrame):
+                for ticker in tickers:
+                    try:
+                        # For MultiIndex columns: ('Close', 'AAPL')
+                        if ("Close", ticker) in data.columns:
+                            prices[ticker] = float(data[("Close", ticker)].iloc[-1].item())
+                    except (KeyError, TypeError):
+                        # Fallback: try simple column access
+                        if ticker in data.columns:
+                            prices[ticker] = float(data[ticker]["Close"].iloc[-1].item())
+        
+        return prices
+    except Exception as e:
+        logging.error(f"Error batch fetching prices: {e}")
+        return {}

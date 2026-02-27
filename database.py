@@ -53,6 +53,7 @@ class DatabaseManager:
                     date TEXT NOT NULL,
                     type TEXT NOT NULL CHECK(type IN ('Income', 'Expense')),
                     amount REAL NOT NULL,
+                    currency TEXT DEFAULT 'USD',
                     category TEXT,
                     tag TEXT,
                     note TEXT,
@@ -71,6 +72,7 @@ class DatabaseManager:
                     trade_type TEXT NOT NULL CHECK(trade_type IN ('Buy', 'Sell')),
                     shares REAL NOT NULL,
                     price REAL NOT NULL,
+                    currency TEXT DEFAULT 'USD',
                     note TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -87,6 +89,17 @@ class DatabaseManager:
                 )
                 """
             )
+            
+            # Add currency column for existing tables (if it doesn't exist)
+            try:
+                c.execute(f"ALTER TABLE {TABLE_TRANSACTIONS} ADD COLUMN currency TEXT DEFAULT 'USD'")
+            except sqlite3.OperationalError:
+                pass
+            
+            try:
+                c.execute(f"ALTER TABLE {TABLE_INVESTMENTS} ADD COLUMN currency TEXT DEFAULT 'USD'")
+            except sqlite3.OperationalError:
+                pass
 
             conn.commit()
 
@@ -104,6 +117,7 @@ class DatabaseManager:
         category: Optional[str] = None,
         tag: Optional[str] = None,
         note: Optional[str] = None,
+        currency: str = "USD",
     ) -> bool:
         """Insert a new transaction."""
         try:
@@ -112,10 +126,10 @@ class DatabaseManager:
                 c.execute(
                     f"""
                     INSERT INTO {TABLE_TRANSACTIONS} 
-                    (date, type, amount, category, tag, note) 
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (date, type, amount, currency, category, tag, note) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (date, transaction_type, amount, category, tag, note),
+                    (date, transaction_type, amount, currency, category, tag, note),
                 )
                 conn.commit()
             return True
@@ -131,6 +145,7 @@ class DatabaseManager:
         shares: float,
         price: float,
         note: Optional[str] = None,
+        currency: str = "USD",
     ) -> bool:
         """Insert a new investment trade."""
         try:
@@ -139,10 +154,10 @@ class DatabaseManager:
                 c.execute(
                     f"""
                     INSERT INTO {TABLE_INVESTMENTS} 
-                    (date, ticker, trade_type, shares, price, note) 
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (date, ticker, trade_type, shares, price, currency, note) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (date, ticker.upper(), trade_type, shares, price, note),
+                    (date, ticker.upper(), trade_type, shares, price, currency, note),
                 )
                 conn.commit()
             return True
