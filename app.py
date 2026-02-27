@@ -106,79 +106,86 @@ def format_investments_with_links(investments_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def display_live_prices(portfolio_df: object) -> None:
-    """Display real-time stock prices with expanded details."""
+    """Display real-time stock prices with scrollable container and expandable details."""
     if portfolio_df.empty:
         return
     
     st.subheader("📊 Live Stock Prices")
-    for idx, row in portfolio_df.iterrows():
-        ticker = row['Ticker']
-        current_price = row['Current Price']
-        avg_cost = row['Avg Cost']
-        change = current_price - avg_cost
-        change_pct = (change / avg_cost * 100) if avg_cost > 0 else 0
-        
-        # Get stock stats
-        stats = get_stock_stats_summary(ticker)
-        
-        color = "green" if change >= 0 else "red"
-        symbol = "📈" if change >= 0 else "📉"
-        
-        # Display basic info
-        st.markdown(
-            f"{symbol} **{ticker}** | Current: ${current_price:.2f} | "
-            f"Avg Cost: ${avg_cost:.2f} | "
-            f"<span style='color:{color}'>Change: {change:+.2f} ({change_pct:+.2f}%)</span>",
-            unsafe_allow_html=True
-        )
-        
-        # Display additional stats if available
-        if stats:
-            stats_text = (
-                f"📊 Open: ${stats.get('open', 0):.2f} | "
-                f"High: ${stats.get('high', 0):.2f} | "
-                f"Low: ${stats.get('low', 0):.2f} | "
-                f"Vol: {stats.get('volume', 0):,.0f}"
-            )
-            st.caption(stats_text)
-        
-        # Chart display button
-        if st.button(f"📈 Show Chart - {ticker}", key=f"chart_{ticker}"):
-            st.session_state[f"show_chart_{ticker}"] = not st.session_state.get(f"show_chart_{ticker}", False)
-        
-        # Display chart if selected
-        if st.session_state.get(f"show_chart_{ticker}", False):
-            chart_timeframe = st.radio(
-                f"Select timeframe for {ticker}",
-                ["1D", "1W", "1M", "1Y"],
-                horizontal=True,
-                key=f"timeframe_{ticker}"
+    
+    # Fixed-height scrollable container for price list
+    with st.container(height=500, border=True):
+        for idx, row in portfolio_df.iterrows():
+            ticker = row['Ticker']
+            current_price = row['Current Price']
+            avg_cost = row['Avg Cost']
+            change = current_price - avg_cost
+            change_pct = (change / avg_cost * 100) if avg_cost > 0 else 0
+            
+            color = "green" if change >= 0 else "red"
+            symbol = "📈" if change >= 0 else "📉"
+            yahoo_link = f"https://finance.yahoo.com/quote/{ticker}"
+            
+            # Always visible: Core metrics (ticker as clickable link, price, P&L)
+            st.markdown(
+                f"[{symbol} **{ticker}**]({yahoo_link}) | Current: ${current_price:.2f} | "
+                f"Avg Cost: ${avg_cost:.2f} | "
+                f"<span style='color:{color}'>Change: {change:+.2f} ({change_pct:+.2f}%)</span>",
+                unsafe_allow_html=True
             )
             
-            period_map = {"1D": "1d", "1W": "5d", "1M": "1mo", "1Y": "1y"}
-            hist_data = get_historical_data(ticker, period_map[chart_timeframe])
-            
-            if hist_data is not None and not hist_data.empty:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=hist_data.index,
-                    y=hist_data['Close'],
-                    mode='lines',
-                    name='Close Price',
-                    line=dict(color='#1f77b4', width=2)
-                ))
-                fig.update_layout(
-                    title=f"{ticker} Stock Price - {chart_timeframe}",
-                    xaxis_title="Date",
-                    yaxis_title="Price ($)",
-                    hovermode='x unified',
-                    height=400
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning(f"Could not retrieve chart data for {ticker}")
-        
-        st.divider()
+            # Expandable section: Extended stats and chart
+            with st.expander(f"📊 View Details & Chart - {ticker}"):
+                # Display extended stock statistics with smaller font
+                stats = get_stock_stats_summary(ticker)
+                if stats:
+                    st.markdown("**Stock Statistics:**")
+                    stats_cols = st.columns(4)
+                    with stats_cols[0]:
+                        st.markdown(f"<div style='font-size: 0.85em; text-align: center;'><b>Open</b><br>${stats.get('open', 0):.2f}</div>", unsafe_allow_html=True)
+                    with stats_cols[1]:
+                        st.markdown(f"<div style='font-size: 0.85em; text-align: center;'><b>High</b><br>${stats.get('high', 0):.2f}</div>", unsafe_allow_html=True)
+                    with stats_cols[2]:
+                        st.markdown(f"<div style='font-size: 0.85em; text-align: center;'><b>Low</b><br>${stats.get('low', 0):.2f}</div>", unsafe_allow_html=True)
+                    with stats_cols[3]:
+                        st.markdown(f"<div style='font-size: 0.85em; text-align: center;'><b>Volume</b><br>{stats.get('volume', 0):,.0f}</div>", unsafe_allow_html=True)
+                    st.divider()
+                
+                    # Timeframe selector (collapsed label for compact layout)
+                    chart_timeframe = st.radio(
+                        f"Timeframe for {ticker}",
+                        ["1D", "1W", "1M", "1Y"],
+                        horizontal=True,
+                        key=f"timeframe_{ticker}",
+                        label_visibility="collapsed"
+                    )
+                    
+                    # Fetch and display price chart
+                    period_map = {"1D": "1d", "1W": "5d", "1M": "1mo", "1Y": "1y"}
+                    hist_data = get_historical_data(ticker, period_map[chart_timeframe])
+                    
+                    if hist_data is not None and not hist_data.empty:
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(
+                            x=hist_data.index,
+                            y=hist_data['Close'],
+                            mode='lines',
+                            name='Close Price',
+                            line=dict(color='#1f77b4', width=2)
+                        ))
+                        # Optimized layout for compact expander display
+                        fig.update_layout(
+                            title=f"{ticker} - {chart_timeframe}",
+                            xaxis_title="",
+                            yaxis_title="Price ($)",
+                            hovermode='x unified',
+                            height=250,
+                            margin=dict(l=0, r=0, t=30, b=0)
+                        )
+                        st.plotly_chart(fig, width='stretch')
+                    else:
+                        st.warning(f"Could not retrieve chart data for {ticker}")
+                
+                st.divider()
 
 
 @st.dialog("📋 Confirm Trade")
@@ -205,16 +212,49 @@ def show_trade_confirmation(trade_data: dict) -> None:
     # Confirmation buttons
     col_confirm, col_cancel = st.columns(2)
     with col_confirm:
-        if st.button("✅ Confirm & Save", use_container_width=True):
+        if st.button("✅ Confirm & Save", width='stretch'):
             st.session_state.trade_confirmed = True
             st.rerun()
     with col_cancel:
-        if st.button("❌ Cancel", use_container_width=True):
+        if st.button("❌ Cancel", width='stretch'):
             st.session_state.trade_confirmed = False
             st.rerun()
 
 
-@st.dialog("🚨 Clear All Data")
+@st.dialog("�️ Delete Transaction")
+def show_delete_confirmation(ticker: str, trade_type: str, shares: float, price: float, row_id: int, index: int, db_ref) -> None:
+    """Show delete transaction confirmation dialog."""
+    st.error(f"⚠️ Are you sure you want to delete this transaction?")
+    
+    st.write(f"**{trade_type}** {shares} shares of **{ticker}** @ ${price:.2f}")
+    
+    st.divider()
+    
+    col_confirm, col_cancel = st.columns(2)
+    with col_confirm:
+        if st.button("✅ Confirm Delete", width='stretch', key=f"confirm_delete_dialog_{index}_{row_id}"):
+            try:
+                # Delete from database
+                conn = db_ref.get_conn()
+                cursor = conn.cursor()
+                cursor.execute(f"DELETE FROM {TABLE_INVESTMENTS} WHERE id = ?", (row_id,))
+                conn.commit()
+                conn.close()
+                
+                display_confirmation_message("✅ Transaction deleted successfully!")
+                st.session_state[f"confirm_delete_{index}"] = False
+                st.rerun()
+            except Exception as e:
+                display_confirmation_message(f"❌ Error: {str(e)}", "error")
+                st.session_state[f"confirm_delete_{index}"] = False
+    
+    with col_cancel:
+        if st.button("❌ Cancel", width='stretch', key=f"cancel_delete_dialog_{index}_{row_id}"):
+            st.session_state[f"confirm_delete_{index}"] = False
+            st.rerun()
+
+
+@st.dialog("�🚨 Clear All Data")
 def show_clear_confirmation() -> None:
     """Show double confirmation for clearing all data."""
     st.error("⚠️ WARNING: This action cannot be undone!")
@@ -227,11 +267,11 @@ def show_clear_confirmation() -> None:
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔴 Yes, Delete Everything", use_container_width=True):
+        if st.button("🔴 Yes, Delete Everything", width='stretch'):
             st.session_state.clear_confirmed = True
             st.rerun()
     with col2:
-        if st.button("🔵 Cancel", use_container_width=True):
+        if st.button("🔵 Cancel", width='stretch'):
             st.session_state.clear_confirmed = False
             st.rerun()
 
@@ -373,28 +413,10 @@ def main() -> None:
         
         st.divider()
         
-        # Confirm button (requires ticker selection)
-        if ticker_input and shares > 0 and price > 0:
-            if st.button("✅ Confirm Trade", use_container_width=True):
-                # Prepare trade data for confirmation dialog
-                trade_data = {
-                    "trade_type": trade_type,
-                    "ticker": ticker_input,
-                    "shares": shares,
-                    "price": price,
-                    "date": trade_date,
-                    "note": note
-                }
-                st.session_state.pending_trade = trade_data
-                show_trade_confirmation(trade_data)
-        elif not ticker_input:
-            st.warning("⚠️ Please select a ticker to proceed")
-        elif shares <= 0 or price <= 0:
-            st.warning("⚠️ Shares and price must be greater than 0")
-            
-            # Check if trade was confirmed
-            if st.session_state.get('trade_confirmed', False):
-                trade_data = st.session_state.get('pending_trade', {})
+        # Check if trade was confirmed in dialog (must be checked FIRST, before form)
+        if st.session_state.get('trade_confirmed', False):
+            trade_data = st.session_state.get('pending_trade', {})
+            if trade_data:
                 success = db.insert_investment(
                     str(trade_data['date']),
                     trade_data['ticker'],
@@ -413,27 +435,39 @@ def main() -> None:
                     display_confirmation_message("❌ Failed to record trade.", "error")
                     st.session_state.trade_confirmed = False
         
+        # Show form for new trades
+        # Confirm button (requires ticker selection)
+        if ticker_input and shares > 0 and price > 0:
+            if st.button("✅ Confirm Trade", width='stretch'):
+                # Prepare trade data for confirmation dialog
+                trade_data = {
+                    "trade_type": trade_type,
+                    "ticker": ticker_input,
+                    "shares": shares,
+                    "price": price,
+                    "date": trade_date,
+                    "note": note
+                }
+                st.session_state.pending_trade = trade_data
+                show_trade_confirmation(trade_data)
+        elif not ticker_input:
+            st.warning("⚠️ Please select a ticker to proceed")
+        elif shares <= 0 or price <= 0:
+            st.warning("⚠️ Shares and price must be greater than 0")
+        
         st.divider()
         st.subheader("📊 Current Portfolio")
         if not portfolio_df.empty:
-            # Create column configuration with Yahoo Finance links
-            column_config = {
-                "Ticker": st.column_config.LinkColumn(
-                    label="🔗 Ticker",
-                    help="Click to open on Yahoo Finance"
-                )
-            }
-            
-            # Format tickers as URLs for display
-            portfolio_display = portfolio_df.copy()
-            portfolio_display['Ticker'] = portfolio_display['Ticker'].apply(
-                lambda t: f"https://finance.yahoo.com/quote/{t}"
-            )
-            
+            # Display portfolio with plain ticker symbols (no links)
             st.dataframe(
-                portfolio_display,
-                column_config=column_config,
-                width='stretch'
+                portfolio_df,
+                width='stretch',
+                column_config={
+                    "Ticker": st.column_config.TextColumn(
+                        label="Ticker",
+                        help="Stock symbol"
+                    )
+                }
             )
         else:
             display_empty_state("No active holdings yet.")
@@ -445,25 +479,40 @@ def main() -> None:
         if not investments_df.empty:
             st.subheader("All Transactions")
             
-            # Create column configuration with Yahoo Finance links for ticker
-            column_config = {
-                "ticker": st.column_config.LinkColumn(
-                    label="🔗 Ticker",
-                    help="Click to open on Yahoo Finance"
-                )
-            }
+            # Display transactions with delete option
+            for idx, row in investments_df.iterrows():
+                col_info, col_delete = st.columns([5, 1])
+                
+                with col_info:
+                    # Display transaction info
+                    ticker_link = f"https://finance.yahoo.com/quote/{row['ticker']}"
+                    trade_icon = "🟢" if row['trade_type'] == "Buy" else "🔴"
+                    st.markdown(
+                        f"{trade_icon} [{row['ticker']}]({ticker_link}) | "
+                        f"{row['trade_type']} {row['shares']} @ ${row['price']:.2f} | "
+                        f"Date: {row['date']}",
+                        unsafe_allow_html=True
+                    )
+                    if row['note']:
+                        st.caption(f"📝 {row['note']}")
+                
+                with col_delete:
+                    if st.button("🗑️ Delete", key=f"delete_btn_{idx}_{row['id']}", help="Delete this transaction"):
+                        st.session_state[f"confirm_delete_{idx}"] = True
             
-            # Format tickers as URLs for display
-            investments_display = investments_df.copy()
-            investments_display['ticker'] = investments_display['ticker'].apply(
-                lambda t: f"https://finance.yahoo.com/quote/{t}"
-            )
-            
-            st.dataframe(
-                investments_display,
-                column_config=column_config,
-                width='stretch'
-            )
+            # Check for delete confirmations and show dialog
+            for idx, row in investments_df.iterrows():
+                if st.session_state.get(f"confirm_delete_{idx}", False):
+                    show_delete_confirmation(
+                        ticker=row['ticker'],
+                        trade_type=row['trade_type'],
+                        shares=row['shares'],
+                        price=row['price'],
+                        row_id=row['id'],
+                        index=idx,
+                        db_ref=db
+                    )
+                    st.session_state[f"confirm_delete_{idx}"] = False
             
             # Statistics
             st.divider()
